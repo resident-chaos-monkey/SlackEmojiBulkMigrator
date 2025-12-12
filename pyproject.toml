@@ -1,23 +1,43 @@
 [tool.poetry]
-name = "slackemojibulkmigrator"
-version = "0.1.0"
-description = ""
+name = "emoji-bulk-migrator"
+version = "0.3.0"
+description = "Sync custom emojis between Slack workspaces"
 authors = ["Luke Taranto <luke.taranto@gmail.com>"]
 readme = "README.md"
+packages = [{include = "emoji_bulk_migrator"}]
+
+[tool.poetry.scripts]
+emoji-sync = "main:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"
 requests = "^2.28.2"
-aiohttp = "^3.8.4"
-isort = "^5.12.0"
-slack-sdk = "^3.20.0"
-
+slack-sdk = "^3.39.0"
+click = "^8.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.2.1"
 pytest-cov = "^4.0.0"
-mockito = "^1.4.0"
+pytest-asyncio = "^0.23.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["emoji_bulk_migrator_tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["emoji_bulk_migrator"]
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]

@@ -271,7 +271,8 @@ obj/
 /.vscode/settings.json
 /.coverage
 
-venv
-venv64
+.venv/
+venv/
+venv64/
 Pipfile.lock
 Pipfile

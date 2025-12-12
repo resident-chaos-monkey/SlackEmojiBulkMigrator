@@ -37,12 +37,18 @@ class SlackApiHandler(Protocol):
         """
         ...
 
-    def upload_emoji(self, name: str, image_data: bytes) -> None:
+    def upload_emoji(
+        self,
+        name: str,
+        image_data: bytes,
+        content_type: str = "image/png",
+    ) -> None:
         """Upload an emoji to the workspace.
         
         Args:
             name: The emoji name (without colons or extension).
             image_data: The raw image bytes.
+            content_type: The MIME type of the image.
             
         Raises:
             Exception: If the upload fails.

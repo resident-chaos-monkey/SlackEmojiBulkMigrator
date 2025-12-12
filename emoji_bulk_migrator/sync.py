@@ -13,6 +13,19 @@ from emoji_bulk_migrator.protocols import SlackApiHandler, StorageHandler
 
 logger = logging.getLogger(__name__)
 
+
+def detect_content_type(filename: str) -> str:
+    """Detect content type from filename extension."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    type_map = {
+        "png": "image/png",
+        "gif": "image/gif",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+    }
+    return type_map.get(ext, "image/png")
+
 # Characters that are invalid in filenames
 INVALID_FILENAME_CHARS = re.compile(r'[:|;]')
 
@@ -180,8 +193,9 @@ def upload_emojis(
         try:
             logger.debug(f"Uploading {name}...")
             content = storage_handler.read_file(filename)
+            content_type = detect_content_type(filename)
             
-            api_handler.upload_emoji(name, content)
+            api_handler.upload_emoji(name, content, content_type)
             
             result.processed += 1
             logger.info(f"Uploaded: {name}")

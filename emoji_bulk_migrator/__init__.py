@@ -43,6 +43,7 @@ from emoji_bulk_migrator.sync import (
     upload_emojis,
     sync_emojis,
     sanitize_filename,
+    detect_content_type,
 )
 from emoji_bulk_migrator.async_slack import AsyncSlackHandler
 from emoji_bulk_migrator.async_sync import (
@@ -73,6 +74,7 @@ __all__ = [
     "upload_emojis",
     "sync_emojis",
     "sanitize_filename",
+    "detect_content_type",
     # Async
     "AsyncSlackHandler",
     "async_download_emojis",

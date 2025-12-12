@@ -1,202 +1,366 @@
-"""Tests for the CLI module."""
+"""Tests for the Click CLI module."""
 
 import pytest
-from emoji_bulk_migrator.cli import (
-    create_parser,
-    parse_args,
-    setup_logging,
-    get_source_config,
-    get_dest_config,
-    validate_config,
-)
+from click.testing import CliRunner
+from unittest.mock import patch, Mock
+
+from emoji_bulk_migrator.cli import cli, validate_config, create_api_handler
 from emoji_bulk_migrator.models import SlackConfig
 
 
-class TestCreateParser:
-    """Tests for parser creation."""
-
-    def test_parser_created(self):
-        """Test that parser is created without errors."""
-        parser = create_parser()
-        assert parser is not None
-
-    def test_help_works(self):
-        """Test that help flag works."""
-        parser = create_parser()
-        with pytest.raises(SystemExit) as exc_info:
-            parser.parse_args(["--help"])
-        assert exc_info.value.code == 0
+@pytest.fixture
+def runner():
+    """Create a Click CLI test runner."""
+    return CliRunner()
 
 
-class TestParseArgs:
-    """Tests for argument parsing."""
+class TestCliBasics:
+    """Basic CLI tests."""
 
-    def test_download_command(self):
-        """Test parsing download command."""
-        args = parse_args([
+    def test_help(self, runner):
+        """Test that --help works."""
+        result = runner.invoke(cli, ["--help"])
+        assert result.exit_code == 0
+        assert "Sync custom emojis" in result.output
+
+    def test_version(self, runner):
+        """Test that --version works."""
+        result = runner.invoke(cli, ["--version"])
+        assert result.exit_code == 0
+        assert "0.2.0" in result.output
+
+    def test_no_command_shows_help(self, runner):
+        """Test invoking with no command shows help."""
+        result = runner.invoke(cli, [])
+        assert result.exit_code == 0
+        assert "Usage:" in result.output
+
+
+class TestDownloadCommand:
+    """Tests for the download command."""
+
+    def test_download_help(self, runner):
+        """Test download --help."""
+        result = runner.invoke(cli, ["download", "--help"])
+        assert result.exit_code == 0
+        assert "Download emojis" in result.output
+        assert "--source-workspace" in result.output
+        assert "--source-token" in result.output
+
+    def test_download_missing_workspace(self, runner):
+        """Test download fails without workspace."""
+        result = runner.invoke(cli, [
             "download",
-            "--source-workspace", "myworkspace",
-            "--source-token", "xoxp-123"
+            "--source-token", "xoxp-test"
         ])
-        
-        assert args.command == "download"
-        assert args.source_workspace == "myworkspace"
-        assert args.source_token == "xoxp-123"
+        assert result.exit_code == 1
+        assert "workspace is required" in result.output
 
-    def test_upload_command(self):
-        """Test parsing upload command."""
-        args = parse_args([
-            "upload",
-            "--dest-workspace", "destworkspace",
-            "--dest-token", "xoxp-456"
+    def test_download_missing_token(self, runner):
+        """Test download fails without token."""
+        result = runner.invoke(cli, [
+            "download",
+            "--source-workspace", "test"
         ])
-        
-        assert args.command == "upload"
-        assert args.dest_workspace == "destworkspace"
-        assert args.dest_token == "xoxp-456"
+        assert result.exit_code == 1
+        assert "token is required" in result.output
 
-    def test_sync_command(self):
-        """Test parsing sync command."""
-        args = parse_args([
+    def test_download_from_env(self, runner):
+        """Test download reads from environment variables."""
+        with patch('emoji_bulk_migrator.cli.download_emojis') as mock_download:
+            mock_download.return_value = Mock(processed=5, skipped=2, failed=0, errors=[])
+            
+            result = runner.invoke(cli, ["download"], env={
+                "SOURCE_SLACK_WORKSPACE": "envworkspace",
+                "SOURCE_SLACK_TOKEN": "env-token"
+            })
+            
+            assert result.exit_code == 0
+            assert "Download complete" in result.output
+            mock_download.assert_called_once()
+
+    def test_download_args_override_env(self, runner):
+        """Test that CLI args override env vars."""
+        with patch('emoji_bulk_migrator.cli.download_emojis') as mock_download:
+            with patch('emoji_bulk_migrator.cli.create_api_handler') as mock_handler:
+                mock_download.return_value = Mock(processed=0, skipped=0, failed=0, errors=[])
+                mock_handler.return_value = Mock()
+                
+                result = runner.invoke(cli, [
+                    "download",
+                    "--source-workspace", "argworkspace",
+                    "--source-token", "arg-token"
+                ], env={
+                    "SOURCE_SLACK_WORKSPACE": "envworkspace",
+                    "SOURCE_SLACK_TOKEN": "env-token"
+                })
+                
+                # Check that argworkspace was used (from CLI), not envworkspace
+                assert "argworkspace" in result.output
+
+
+class TestUploadCommand:
+    """Tests for the upload command."""
+
+    def test_upload_help(self, runner):
+        """Test upload --help."""
+        result = runner.invoke(cli, ["upload", "--help"])
+        assert result.exit_code == 0
+        assert "Upload emojis" in result.output
+        assert "--dest-workspace" in result.output
+        assert "--dest-token" in result.output
+
+    def test_upload_missing_config(self, runner):
+        """Test upload fails without config."""
+        result = runner.invoke(cli, ["upload"])
+        assert result.exit_code == 1
+        assert "required" in result.output
+
+    def test_upload_success(self, runner):
+        """Test successful upload."""
+        with patch('emoji_bulk_migrator.cli.upload_emojis') as mock_upload:
+            mock_upload.return_value = Mock(processed=3, skipped=1, failed=0, errors=[])
+            
+            result = runner.invoke(cli, [
+                "upload",
+                "--dest-workspace", "destworkspace",
+                "--dest-token", "dest-token"
+            ])
+            
+            assert result.exit_code == 0
+            assert "Upload complete" in result.output
+            assert "Uploaded:   3" in result.output
+            assert "Skipped:    1" in result.output
+
+
+class TestSyncCommand:
+    """Tests for the sync command."""
+
+    def test_sync_help(self, runner):
+        """Test sync --help."""
+        result = runner.invoke(cli, ["sync", "--help"])
+        assert result.exit_code == 0
+        assert "Sync emojis" in result.output
+        assert "--source-workspace" in result.output
+        assert "--dest-workspace" in result.output
+
+    def test_sync_missing_source(self, runner):
+        """Test sync fails without source config."""
+        result = runner.invoke(cli, [
+            "sync",
+            "--dest-workspace", "dest",
+            "--dest-token", "token"
+        ])
+        assert result.exit_code == 1
+        assert "Source" in result.output and "required" in result.output
+
+    def test_sync_missing_dest(self, runner):
+        """Test sync fails without dest config."""
+        result = runner.invoke(cli, [
             "sync",
             "--source-workspace", "source",
-            "--source-token", "xoxp-src",
-            "--dest-workspace", "dest",
-            "--dest-token", "xoxp-dst"
+            "--source-token", "token"
         ])
-        
-        assert args.command == "sync"
-        assert args.source_workspace == "source"
-        assert args.dest_workspace == "dest"
+        assert result.exit_code == 1
+        assert "Destination" in result.output and "required" in result.output
 
-    def test_list_command(self):
-        """Test parsing list command."""
-        args = parse_args(["list"])
-        
-        assert args.command == "list"
+    def test_sync_success(self, runner):
+        """Test successful sync."""
+        with patch('emoji_bulk_migrator.cli.download_emojis') as mock_download:
+            with patch('emoji_bulk_migrator.cli.upload_emojis') as mock_upload:
+                mock_download.return_value = Mock(processed=5, skipped=0, failed=0, errors=[])
+                mock_upload.return_value = Mock(processed=5, skipped=0, failed=0, errors=[])
+                
+                result = runner.invoke(cli, [
+                    "sync",
+                    "--source-workspace", "source",
+                    "--source-token", "src-token",
+                    "--dest-workspace", "dest",
+                    "--dest-token", "dst-token"
+                ])
+                
+                assert result.exit_code == 0
+                assert "Sync Complete" in result.output
 
-    def test_global_options(self):
-        """Test global options."""
-        args = parse_args([
-            "--verbose",
-            "--storage-path", "/custom/path",
-            "--api-mode", "http",
+
+class TestListCommand:
+    """Tests for the list command."""
+
+    def test_list_help(self, runner):
+        """Test list --help."""
+        result = runner.invoke(cli, ["list", "--help"])
+        assert result.exit_code == 0
+        assert "List emojis" in result.output
+
+    def test_list_empty(self, runner, tmp_path):
+        """Test list with empty directory."""
+        result = runner.invoke(cli, [
+            "--storage-path", str(tmp_path),
+            "list"
+        ])
+        assert result.exit_code == 0
+        assert "No emojis found" in result.output
+
+    def test_list_with_files(self, runner, tmp_path):
+        """Test list with files in directory."""
+        # Create some test files
+        (tmp_path / "emoji1.png").write_bytes(b"test")
+        (tmp_path / "emoji2.gif").write_bytes(b"test")
+        
+        result = runner.invoke(cli, [
+            "--storage-path", str(tmp_path),
             "list"
         ])
         
-        assert args.verbose is True
-        assert args.storage_path == "/custom/path"
-        assert args.api_mode == "http"
-
-    def test_default_values(self):
-        """Test default values."""
-        args = parse_args(["list"])
-        
-        assert args.verbose is False
-        assert args.quiet is False
-        assert args.storage_path == "./emojis"
-        assert args.api_mode == "web_api"
-
-    def test_no_command(self):
-        """Test parsing with no command."""
-        args = parse_args([])
-        
-        assert args.command is None
+        assert result.exit_code == 0
+        assert "Found 2 emojis" in result.output
+        assert "emoji1.png" in result.output
+        assert "emoji2.gif" in result.output
 
 
-class TestGetSourceConfig:
-    """Tests for get_source_config."""
+class TestCountCommand:
+    """Tests for the count command."""
 
-    def test_from_args(self):
-        """Test config from command line args."""
-        args = parse_args([
-            "download",
-            "--source-workspace", "myworkspace",
-            "--source-token", "xoxp-123",
-            "--source-cookie", "d=abc"
-        ])
-        
-        config = get_source_config(args)
-        
-        assert config.workspace == "myworkspace"
-        assert config.token == "xoxp-123"
-        assert config.cookie == "d=abc"
+    def test_count_help(self, runner):
+        """Test count --help."""
+        result = runner.invoke(cli, ["count", "--help"])
+        assert result.exit_code == 0
+        assert "Count emojis" in result.output
 
-    def test_from_env(self, monkeypatch):
-        """Test config from environment."""
-        monkeypatch.setenv("SOURCE_SLACK_WORKSPACE", "envworkspace")
-        monkeypatch.setenv("SOURCE_SLACK_TOKEN", "env-token")
-        
-        args = parse_args(["download"])
-        config = get_source_config(args)
-        
-        assert config.workspace == "envworkspace"
-        assert config.token == "env-token"
-
-    def test_args_override_env(self, monkeypatch):
-        """Test that args override environment."""
-        monkeypatch.setenv("SOURCE_SLACK_WORKSPACE", "envworkspace")
-        monkeypatch.setenv("SOURCE_SLACK_TOKEN", "env-token")
-        
-        args = parse_args([
-            "download",
-            "--source-workspace", "argworkspace",
-            "--source-token", "arg-token"
-        ])
-        config = get_source_config(args)
-        
-        assert config.workspace == "argworkspace"
-        assert config.token == "arg-token"
-
-
-class TestGetDestConfig:
-    """Tests for get_dest_config."""
-
-    def test_from_args(self):
-        """Test config from command line args."""
-        args = parse_args([
-            "upload",
-            "--dest-workspace", "destworkspace",
-            "--dest-token", "xoxp-456"
-        ])
-        
-        config = get_dest_config(args)
-        
-        assert config.workspace == "destworkspace"
-        assert config.token == "xoxp-456"
+    def test_count_success(self, runner):
+        """Test successful count."""
+        with patch('emoji_bulk_migrator.cli.create_api_handler') as mock_handler:
+            mock_api = Mock()
+            mock_api.list_emojis.return_value = [
+                Mock(extension=".png"),
+                Mock(extension=".gif"),
+                Mock(extension=".png"),
+            ]
+            mock_handler.return_value = mock_api
+            
+            result = runner.invoke(cli, [
+                "count",
+                "--source-workspace", "test",
+                "--source-token", "token"
+            ])
+            
+            assert result.exit_code == 0
+            assert "Found 3 custom emojis" in result.output
+            assert ".png: 2" in result.output
+            assert ".gif: 1" in result.output
 
 
 class TestValidateConfig:
-    """Tests for validate_config."""
+    """Tests for validate_config function."""
 
-    def test_valid_config(self, caplog):
+    def test_valid_config(self):
         """Test validation of valid config."""
         config = SlackConfig(workspace="test", token="xoxp-123")
-        
-        result = validate_config(config, "Source")
-        
-        assert result is True
+        assert validate_config(config, "Source") is True
 
-    def test_missing_workspace(self, caplog):
+    def test_missing_workspace(self):
         """Test validation fails with missing workspace."""
         config = SlackConfig(workspace="", token="xoxp-123")
-        
-        result = validate_config(config, "Source")
-        
-        assert result is False
+        assert validate_config(config, "Source") is False
 
-    def test_missing_token(self, caplog):
+    def test_missing_token(self):
         """Test validation fails with missing token."""
         config = SlackConfig(workspace="test", token="")
-        
-        result = validate_config(config, "Source")
-        
-        assert result is False
+        assert validate_config(config, "Source") is False
 
-    def test_missing_both(self, caplog):
-        """Test validation fails with both missing."""
-        config = SlackConfig(workspace="", token="")
+
+class TestCreateApiHandler:
+    """Tests for create_api_handler function."""
+
+    def test_creates_web_api_handler(self):
+        """Test creating web API handler."""
+        config = SlackConfig(workspace="test", token="xoxp-123")
         
-        result = validate_config(config, "Source")
+        with patch('emoji_bulk_migrator.cli.SlackWebApiHandler') as mock_class:
+            create_api_handler(config, "web_api")
+            mock_class.assert_called_once_with(config)
+
+    def test_creates_http_handler(self):
+        """Test creating HTTP handler."""
+        config = SlackConfig(workspace="test", token="xoxp-123")
         
-        assert result is False
+        with patch('emoji_bulk_migrator.cli.SlackHttpHandler') as mock_class:
+            create_api_handler(config, "http")
+            mock_class.assert_called_once_with(config)
+
+
+class TestGlobalOptions:
+    """Tests for global options."""
+
+    def test_storage_path_option(self, runner, tmp_path):
+        """Test --storage-path option."""
+        result = runner.invoke(cli, [
+            "--storage-path", str(tmp_path),
+            "list"
+        ])
+        assert result.exit_code == 0
+
+    def test_api_mode_option(self, runner):
+        """Test --api-mode option."""
+        with patch('emoji_bulk_migrator.cli.download_emojis') as mock_download:
+            with patch('emoji_bulk_migrator.cli.SlackHttpHandler') as mock_http:
+                mock_download.return_value = Mock(processed=0, skipped=0, failed=0, errors=[])
+                mock_http.return_value = Mock()
+                
+                result = runner.invoke(cli, [
+                    "--api-mode", "http",
+                    "download",
+                    "--source-workspace", "test",
+                    "--source-token", "token"
+                ])
+                
+                # HTTP handler should be used
+                mock_http.assert_called_once()
+
+    def test_verbose_option(self, runner, tmp_path):
+        """Test -v/--verbose option."""
+        result = runner.invoke(cli, [
+            "-v",
+            "--storage-path", str(tmp_path),
+            "list"
+        ])
+        assert result.exit_code == 0
+
+    def test_quiet_option(self, runner, tmp_path):
+        """Test -q/--quiet option."""
+        result = runner.invoke(cli, [
+            "-q",
+            "--storage-path", str(tmp_path),
+            "list"
+        ])
+        assert result.exit_code == 0
+
+
+class TestShortOptions:
+    """Tests for short option aliases."""
+
+    def test_short_source_options(self, runner):
+        """Test short options for source config."""
+        with patch('emoji_bulk_migrator.cli.download_emojis') as mock_download:
+            mock_download.return_value = Mock(processed=0, skipped=0, failed=0, errors=[])
+            
+            result = runner.invoke(cli, [
+                "download",
+                "-sw", "myworkspace",
+                "-st", "mytoken"
+            ])
+            
+            assert result.exit_code == 0
+
+    def test_short_dest_options(self, runner):
+        """Test short options for dest config."""
+        with patch('emoji_bulk_migrator.cli.upload_emojis') as mock_upload:
+            mock_upload.return_value = Mock(processed=0, skipped=0, failed=0, errors=[])
+            
+            result = runner.invoke(cli, [
+                "upload",
+                "-dw", "myworkspace",
+                "-dt", "mytoken"
+            ])
+            
+            assert result.exit_code == 0

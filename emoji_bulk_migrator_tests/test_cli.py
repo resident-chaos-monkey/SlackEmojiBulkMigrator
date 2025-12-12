@@ -27,7 +27,7 @@ class TestCliBasics:
         """Test that --version works."""
         result = runner.invoke(cli, ["--version"])
         assert result.exit_code == 0
-        assert "0.2.0" in result.output
+        assert "0.3.0" in result.output
 
     def test_no_command_shows_help(self, runner):
         """Test invoking with no command shows help."""
@@ -229,13 +229,17 @@ class TestCountCommand:
 
     def test_count_success(self, runner):
         """Test successful count."""
-        with patch('emoji_bulk_migrator.cli.create_api_handler') as mock_handler:
+        import asyncio
+        from unittest.mock import AsyncMock
+        
+        with patch('emoji_bulk_migrator.cli.create_async_handler') as mock_handler:
             mock_api = Mock()
-            mock_api.list_emojis.return_value = [
+            # list_emojis is now async
+            mock_api.list_emojis = AsyncMock(return_value=[
                 Mock(extension=".png"),
                 Mock(extension=".gif"),
                 Mock(extension=".png"),
-            ]
+            ])
             mock_handler.return_value = mock_api
             
             result = runner.invoke(cli, [
